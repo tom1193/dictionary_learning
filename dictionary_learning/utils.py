@@ -293,6 +293,8 @@ def get_submodule(model: AutoModelForCausalLM, layer: int):
         or model.config.architectures[0] == "Qwen3ForCausalLM"
     ):
         return model.model.layers[layer]
+    elif model.config.architectures[0] == "XLMRobertaModel":
+        return model.encoder.layer[layer].output.dense
     else:
         raise ValueError(f"Please add submodule for model {model_name}")
 
