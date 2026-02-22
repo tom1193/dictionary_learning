@@ -219,22 +219,22 @@ def evaluate(
             continue
 
         # compute loss recovered
-        loss_original, loss_reconstructed, loss_zero = loss_recovered(
-            activations.text_batch(batch_size=batch_size),
-            activations.model,
-            activations.submodule,
-            dictionary,
-            max_len=max_len,
-            normalize_batch=normalize_batch,
-            io=io,
-            tracer_args=tracer_args
-        )
-        frac_recovered = (loss_reconstructed - loss_zero) / (loss_original - loss_zero)
+        # loss_original, loss_reconstructed, loss_zero = loss_recovered(
+        #     activations.text_batch(batch_size=batch_size),
+        #     activations.model,
+        #     activations.submodule,
+        #     dictionary,
+        #     max_len=max_len,
+        #     normalize_batch=normalize_batch,
+        #     io=io,
+        #     tracer_args=tracer_args
+        # )
+        # frac_recovered = (loss_reconstructed - loss_zero) / (loss_original - loss_zero)
         
-        out["loss_original"] += loss_original.item()
-        out["loss_reconstructed"] += loss_reconstructed.item()
-        out["loss_zero"] += loss_zero.item()
-        out["frac_recovered"] += frac_recovered.item()
+        # out["loss_original"] += loss_original.item()
+        # out["loss_reconstructed"] += loss_reconstructed.item()
+        # out["loss_zero"] += loss_zero.item()
+        # out["frac_recovered"] += frac_recovered.item()
 
     out = {key: value / n_batches for key, value in out.items()}
     frac_alive = (active_features != 0).float().sum() / dictionary.dict_size
