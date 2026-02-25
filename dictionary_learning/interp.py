@@ -78,6 +78,13 @@ def feature_effect(
     top_probs, top_tokens = t.topk(diff.mean(dim=0), k=k, largest=largest)
     return top_tokens, top_probs
 
+def _list_decode(x, model):
+    if isinstance(x, int):
+        return model.tokenizer.decode(x)
+    else:
+        return [_list_decode(y, model) for y in x]
+
+featureProfile = namedtuple("featureProfile", ["top_contexts", "top_tokens", "top_affected"])
 
 def examine_dimension(
     model, submodule, buffer, dictionary=None, max_length=128, n_inputs=512, dim_idx=None, k=30
@@ -88,12 +95,6 @@ def examine_dimension(
         "validate": False,
         "invoker_args": dict(max_length=max_length),
     }
-
-    def _list_decode(x):
-        if isinstance(x, int):
-            return model.tokenizer.decode(x)
-        else:
-            return [_list_decode(y) for y in x]
 
     if dim_idx is None:
         dim_idx = random.randint(0, activations.shape[-1] - 1)
@@ -136,7 +137,7 @@ def examine_dimension(
         activations[batch_idx, : token_id + 1, None, None]
         for batch_idx, token_id in zip(batch_indices, token_indices)
     ]
-    decoded_tokens = _list_decode(tokens)
+    decoded_tokens = _list_decode(tokens, model)
     top_contexts = text_neuron_activations(decoded_tokens, activations)
 
     top_affected = feature_effect(
@@ -144,10 +145,110 @@ def examine_dimension(
     )
     top_affected = [(model.tokenizer.decode(tok), prob.item()) for tok, prob in zip(*top_affected)]
 
-    return namedtuple("featureProfile", ["top_contexts", "top_tokens", "top_affected"])(
-        top_contexts, top_tokens, top_affected
-    )
+    # return namedtuple("featureProfile", ["top_contexts", "top_tokens", "top_affected"])(
+    #     top_contexts, top_tokens, top_affected
+    # )
+    return featureProfile(top_contexts, top_tokens, top_affected)
 
+def examine_multiple_dimensions(
+    model,
+    submodule,
+    buffer,
+    dictionary,
+    max_length=128,
+    n_inputs=512,
+    dim_idxs=10, # if int, number of random dimensions to examine; if list, specific dimension indices to examine
+    k=30,
+
+):
+    """
+    Vectorized version of `examine_dimension` over many dimensions.
+    Returns dict[int, featureProfile]: mapping dim_idx -> profile
+    """
+    tracer_kwargs = {
+        "scan": False,
+        "validate": False,
+        "invoker_args": dict(max_length=max_length),
+    }
+
+    # sample inputs once
+    inputs = buffer.tokenized_batch(batch_size=n_inputs)
+
+    # trace once, get tokens + activations
+    with t.no_grad(), model.trace(inputs, **tracer_kwargs):
+        tokens = model.inputs[1]["input_ids"].save()
+
+        activations = submodule.output
+        if type(activations.shape) == tuple:
+            activations = activations[0]
+        activations = activations.save()
+
+    tokens = tokens.value
+    activations = activations.value
+
+    # Convert to feature space
+    if dictionary is not None:
+        activations = dictionary.encode(activations)  # (B, T, n_features)
+
+    B, T, D = activations.shape
+    
+    if isinstance(dim_idxs, int):
+        # randomly select dim_idxs as a list of integers
+        dim_idx_list = random.sample(range(D), k=dim_idxs)
+    else:
+        # Check dim_idxs in range
+        out_of_range = [d for d in dim_idxs if d < 0 or d >= D]
+        if out_of_range:
+            raise ValueError(f"Some dim_idxs out of range [0, {D-1}]: {out_of_range}")
+        dim_idx_list = list(dim_idxs)
+
+    profiles = {}
+
+    for dim_idx in dim_idx_list:
+        a = activations[:, :, dim_idx]  # (B, T)
+
+        # top tokens by mean activation over occurrences
+        unique_toks = tokens.unique()
+        token_means = []
+        for tok in unique_toks:
+            idx = t.where(tokens == tok)
+            token_means.append(a[idx].mean())
+        token_means = t.stack(token_means)
+
+        top_vals, top_inds = t.topk(token_means, k=min(k, unique_toks.numel()))
+        top_tok_ids = unique_toks[top_inds]
+        top_tokens = [
+            (model.tokenizer.decode([tid.item()]), top_vals[i].item())
+            for i, tid in enumerate(top_tok_ids)
+        ]
+
+        # top contexts by highest activation positions
+        flat = a.flatten()
+        k_ctx = min(k, flat.numel())
+        _, top_pos = t.topk(flat, k=k_ctx)
+
+        top_contexts = []
+        for pos in top_pos:
+            b = (pos // T).item()
+            j = (pos % T).item()
+            top_contexts.append(tokens[b, : j + 1].tolist())
+
+        top_contexts_str = _list_decode(top_contexts, model)
+        top_contexts_vis = text_neuron_activations(top_contexts_str, a)
+
+        # top affected next tokens via feature ablation
+        top_affected = feature_effect(
+            model, submodule, dictionary, dim_idx, top_contexts, k=k,
+        )
+        top_affected = [(model.tokenizer.decode(tok), prob.item()) for tok, prob in zip(*top_affected)]
+        # top_affected = (
+        #     model.tokenizer.batch_decode(top_affected[0]),
+        #     top_affected[1].tolist(),
+        # )
+
+        profiles[dim_idx] = featureProfile(top_contexts, top_tokens, top_affected)
+
+    return profiles
 
 def feature_umap(
     dictionary,
