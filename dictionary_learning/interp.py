@@ -1,4 +1,5 @@
 import random
+import numpy as np
 from circuitsvis.activations import text_neuron_activations
 from einops import rearrange
 import torch as t
@@ -78,6 +79,11 @@ def feature_effect(
     top_probs, top_tokens = t.topk(diff.mean(dim=0), k=k, largest=largest)
     return top_tokens, top_probs
 
+def _list_decode(x, model):
+    if isinstance(x, int):
+        return model.tokenizer.decode(x)
+    else:
+        return [_list_decode(y, model) for y in x]
 
 def examine_dimension(
     model, submodule, buffer, dictionary=None, max_length=128, n_inputs=512, dim_idx=None, k=30
@@ -88,12 +94,6 @@ def examine_dimension(
         "validate": False,
         "invoker_args": dict(max_length=max_length),
     }
-
-    def _list_decode(x):
-        if isinstance(x, int):
-            return model.tokenizer.decode(x)
-        else:
-            return [_list_decode(y) for y in x]
 
     if dim_idx is None:
         dim_idx = random.randint(0, activations.shape[-1] - 1)
@@ -136,7 +136,7 @@ def examine_dimension(
         activations[batch_idx, : token_id + 1, None, None]
         for batch_idx, token_id in zip(batch_indices, token_indices)
     ]
-    decoded_tokens = _list_decode(tokens)
+    decoded_tokens = _list_decode(tokens, model)
     top_contexts = text_neuron_activations(decoded_tokens, activations)
 
     top_affected = feature_effect(
@@ -146,6 +146,92 @@ def examine_dimension(
 
     return namedtuple("featureProfile", ["top_contexts", "top_tokens", "top_affected"])(
         top_contexts, top_tokens, top_affected
+    )
+
+multiFeatureProfile = namedtuple("multiFeatureProfile", ["top_tokens", "top_contexts", "top_activations"])
+
+
+def examine_multiple_dimensions(
+    model,
+    submodule,
+    buffer,
+    dictionary=None,
+    max_length=128,
+    n_inputs=512,
+    dim_idxs=None,   # list[int] of length D
+    k=30,
+):
+    if dim_idxs is None or len(dim_idxs) == 0:
+        raise ValueError("Expected `dim_idxs` as a non-empty list of feature indices.")
+
+    tracer_kwargs = {
+        "scan": False,
+        "validate": False,
+        "invoker_args": dict(max_length=max_length),
+    }
+
+    inputs = buffer.tokenized_batch(batch_size=n_inputs)
+
+    with t.no_grad(), model.trace(inputs, **tracer_kwargs):
+        tokens = model.inputs[1]["input_ids"].save()
+
+        acts = submodule.output
+        if isinstance(acts, (tuple, list)):
+            acts = acts[0]
+
+        if dictionary is not None:
+            acts = dictionary.encode(acts)
+
+        # Keep only requested dims: shape [B, N, D]
+        acts = acts[:, :, dim_idxs].save()
+
+    tokens_t = tokens.value                      # [B, N]
+    acts_t = acts.value                          # [B, N, D]
+    B, N = tokens_t.shape
+    D = acts_t.shape[-1]
+
+    # top k tokens by mean activation per feature
+    flat_tokens = tokens_t.reshape(-1)           # [B*N]
+    flat_acts = acts_t.reshape(-1, D)            # [B*N, D]
+
+    uniq_toks, inv = t.unique(flat_tokens, return_inverse=True)  # uniq_toks: [U], inv: [B*N]
+    U = uniq_toks.shape[0]
+
+    sums = t.zeros((U, D), device=flat_acts.device, dtype=flat_acts.dtype)
+    sums.index_add_(0, inv, flat_acts)           # sums[u, d] = sum activations where token==uniq_toks[u]
+    counts = t.bincount(inv, minlength=U).to(flat_acts.dtype).clamp_min(1.0)  # [U]
+    means = sums / counts[:, None]               # [U, D]
+
+    k_tokens = min(k, U)
+    top_tokens = []
+    for d in range(D):
+        vals, idxs = t.topk(means[:, d], k_tokens, largest=True)
+        toks = uniq_toks[idxs].tolist()
+        vals = vals.tolist()
+        top_tokens.append([(model.tokenizer.decode(int(tok)), float(val)) for tok, val in zip(toks, vals)])
+
+    # prefix as context for top activated tokens
+    decoded_contexts = []
+    top_activations = []
+    for d in range(D):
+        flat_act = flat_acts[:, d]  # [B*N]
+        topk_indices = t.argsort(flat_act, dim=0, descending=True)[:k]
+        batch_indices = topk_indices // N
+        token_indices = topk_indices % N
+        context_tokens = [
+            tokens[batch_idx, : token_idx + 1].tolist()
+            for batch_idx, token_idx in zip(batch_indices, token_indices)
+        ]
+        context_acts = [
+            acts_t[batch_idx, : token_id + 1, d].detach().to("cpu").numpy()
+            for batch_idx, token_id in zip(batch_indices, token_indices)
+        ]
+        decoded_context_tokens = _list_decode(context_tokens, model)
+        decoded_contexts.append(decoded_context_tokens)
+        top_activations.append(context_acts)
+
+    return namedtuple("multiFeatureProfile", ["top_tokens", "top_contexts", "top_activations"])(
+        top_tokens, decoded_contexts, top_activations
     )
 
 
