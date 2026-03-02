@@ -275,3 +275,4 @@ def feature_umap(
             color=colors,
         )
     raise ValueError("n_components must be 2 or 3")
+
