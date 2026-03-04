@@ -251,7 +251,7 @@ def get_nested_folders(path: str) -> list[str]:
 
 def load_dictionary(base_path: str, device: str, checkpoint: str = None) -> tuple:
 
-    ae_path = checkpoint if checkpoint else f"{base_path}/ae.pt" 
+    ae_path = os.path.join(base_path, "checkpoints", checkpoint) if checkpoint else f"{base_path}/ae.pt" 
     config_path = f"{base_path}/config.json"
 
     with open(config_path, "r") as f:
