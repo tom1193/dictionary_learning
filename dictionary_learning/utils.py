@@ -250,8 +250,10 @@ def get_nested_folders(path: str) -> list[str]:
 
 
 def load_dictionary(base_path: str, device: str, checkpoint: str = None) -> tuple:
-
-    ae_path = os.path.join(base_path, "checkpoints", checkpoint) if checkpoint else f"{base_path}/ae.pt" 
+    """Load a dictionary from base_path. Supports two config formats:
+    base_path can be any absolute or relative path containing ae.pt and config.json.
+    """
+    ae_path = os.path.join(base_path, "checkpoints", checkpoint) if checkpoint else f"{base_path}/ae.pt"
     config_path = f"{base_path}/config.json"
 
     with open(config_path, "r") as f:
@@ -286,6 +288,7 @@ def load_dictionary(base_path: str, device: str, checkpoint: str = None) -> tupl
     return dictionary, config
 
 
+<<<<<<< HEAD
 def get_submodule(model: AutoModelForCausalLM, layer: int, module_type: str="resid"):
     """Get mlp, attention, or residual stream submodule. Defaults to the residual stream"""
     model_name = model.name_or_path
@@ -295,12 +298,28 @@ def get_submodule(model: AutoModelForCausalLM, layer: int, module_type: str="res
             return model.gpt_neox.layers[layer].mlp
         elif module_type=="attn":
             return model.gpt_neox.layers[layer].attention
+=======
+def get_submodule(model: AutoModelForCausalLM, layer: int, submodule_type: str = "resid"):
+    """Gets the submodule at the given layer.
+
+    submodule_type:
+      "resid"   - full transformer layer output (residual stream); default
+      "mlp_out" - MLP submodule output (for dicts trained on mlp_out activations)
+    """
+    model_name = model.name_or_path
+
+    if model.config.architectures[0] == "GPTNeoXForCausalLM":
+        if submodule_type == "mlp_out":
+            return model.gpt_neox.layers[layer].mlp
+>>>>>>> 0145bdc16dc5fdc71af79516dcbaf1218ec9b162
         return model.gpt_neox.layers[layer]
     elif (
         model.config.architectures[0] == "Qwen2ForCausalLM"
         or model.config.architectures[0] == "Gemma2ForCausalLM"
         or model.config.architectures[0] == "Qwen3ForCausalLM"
     ):
+        if submodule_type == "mlp_out":
+            return model.model.layers[layer].mlp
         return model.model.layers[layer]
     elif model.config.architectures[0] == "XLMRobertaModel":
         return model.encoder.layer[layer].output.dense
