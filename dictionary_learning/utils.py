@@ -257,8 +257,12 @@ def load_dictionary(base_path: str, device: str, checkpoint: str = None) -> tupl
     with open(config_path, "r") as f:
         config = json.load(f)
 
+    if "trainer" not in config:
+        dictionary = AutoEncoder.from_pretrained(ae_path, device=device)
+        return dictionary, config
+    
     dict_class = config["trainer"]["dict_class"]
-
+        
     if dict_class == "AutoEncoder":
         dictionary = AutoEncoder.from_pretrained(ae_path, device=device)
     elif dict_class == "GatedAutoEncoder":
@@ -282,11 +286,15 @@ def load_dictionary(base_path: str, device: str, checkpoint: str = None) -> tupl
     return dictionary, config
 
 
-def get_submodule(model: AutoModelForCausalLM, layer: int):
-    """Gets the residual stream submodule"""
+def get_submodule(model: AutoModelForCausalLM, layer: int, module_type: str="resid"):
+    """Get mlp, attention, or residual stream submodule. Defaults to the residual stream"""
     model_name = model.name_or_path
 
     if model.config.architectures[0] == "GPTNeoXForCausalLM":
+        if module_type=="mlp_out":
+            return model.gpt_neox.layers[layer].mlp
+        elif module_type=="attn":
+            return model.gpt_neox.layers[layer].attention
         return model.gpt_neox.layers[layer]
     elif (
         model.config.architectures[0] == "Qwen2ForCausalLM"
