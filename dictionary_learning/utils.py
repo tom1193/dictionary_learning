@@ -250,12 +250,19 @@ def get_nested_folders(path: str) -> list[str]:
 
 
 def load_dictionary(base_path: str, device: str, checkpoint: str = None) -> tuple:
-
-    ae_path = os.path.join(base_path, "checkpoints", checkpoint) if checkpoint else f"{base_path}/ae.pt" 
+    """Load a dictionary from base_path. Supports two config formats:
+    base_path can be any absolute or relative path containing ae.pt and config.json.
+    """
+    ae_path = os.path.join(base_path, "checkpoints", checkpoint) if checkpoint else f"{base_path}/ae.pt"
     config_path = f"{base_path}/config.json"
 
     with open(config_path, "r") as f:
         config = json.load(f)
+
+    # Support flat pretrained config format (no nested "trainer" key)
+    if "trainer" not in config:
+        dictionary = AutoEncoder.from_pretrained(ae_path, device=device)
+        return dictionary, config
 
     dict_class = config["trainer"]["dict_class"]
 
@@ -282,17 +289,26 @@ def load_dictionary(base_path: str, device: str, checkpoint: str = None) -> tupl
     return dictionary, config
 
 
-def get_submodule(model: AutoModelForCausalLM, layer: int):
-    """Gets the residual stream submodule"""
+def get_submodule(model: AutoModelForCausalLM, layer: int, submodule_type: str = "resid"):
+    """Gets the submodule at the given layer.
+
+    submodule_type:
+      "resid"   - full transformer layer output (residual stream); default
+      "mlp_out" - MLP submodule output (for dicts trained on mlp_out activations)
+    """
     model_name = model.name_or_path
 
     if model.config.architectures[0] == "GPTNeoXForCausalLM":
+        if submodule_type == "mlp_out":
+            return model.gpt_neox.layers[layer].mlp
         return model.gpt_neox.layers[layer]
     elif (
         model.config.architectures[0] == "Qwen2ForCausalLM"
         or model.config.architectures[0] == "Gemma2ForCausalLM"
         or model.config.architectures[0] == "Qwen3ForCausalLM"
     ):
+        if submodule_type == "mlp_out":
+            return model.model.layers[layer].mlp
         return model.model.layers[layer]
     elif model.config.architectures[0] == "XLMRobertaModel":
         return model.encoder.layer[layer].output.dense
