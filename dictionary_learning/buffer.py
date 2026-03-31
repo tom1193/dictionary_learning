@@ -101,18 +101,19 @@ class ActivationBuffer:
         except StopIteration:
             raise StopIteration("End of data stream reached")
     
-    def tokenized_batch(self, batch_size=None):
+    def tokenized_batch(self, batch_size=None, text_batch=None, padding=None):
         """
         Return a batch of tokenized inputs.
         """
-        texts = self.text_batch(batch_size=batch_size)
+        texts = text_batch if text_batch else self.text_batch(batch_size=batch_size)
         return self.model.tokenizer(
             texts,
             return_tensors='pt',
             max_length=self.ctx_len,
-            padding=True,
+            padding=padding or True,
             truncation=True,
-            add_special_tokens=self.add_special_tokens
+            add_special_tokens=self.add_special_tokens,
+            return_offsets_mapping=True,
         )
 
     def refresh(self):

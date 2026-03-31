@@ -96,7 +96,7 @@ def get_norm_factor(data, steps: int) -> float:
     
     If experiencing troubles with hyperparameter transfer between models, it may be worth instead normalizing to the square root of d_model.
     https://transformer-circuits.pub/2024/april-update/index.html#training-saes"""
-    total_mean_squared_norm = 0
+    total_mean_squared_norm = 0.0
     count = 0
 
     for step, act_BD in enumerate(tqdm(data, total=steps, desc="Calculating norm factor")):
@@ -104,11 +104,13 @@ def get_norm_factor(data, steps: int) -> float:
             break
 
         count += 1
-        mean_squared_norm = t.mean(t.sum(act_BD ** 2, dim=1))
+        # mean_squared_norm = t.mean(t.sum(act_BD ** 2, dim=1))
+        mean_squared_norm = t.mean(t.sum(act_BD.float() ** 2, dim=1)).item()
         total_mean_squared_norm += mean_squared_norm
 
     average_mean_squared_norm = total_mean_squared_norm / count
-    norm_factor = t.sqrt(average_mean_squared_norm).item()
+    # norm_factor = t.sqrt(average_mean_squared_norm).item()
+    norm_factor = average_mean_squared_norm ** 0.5
 
     print(f"Average mean squared norm: {average_mean_squared_norm}")
     print(f"Norm factor: {norm_factor}")
